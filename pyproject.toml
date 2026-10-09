@@ -1,0 +1,17 @@
+[project]
+name = "ece-2026-mael-juhel"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "m-juhel-ece", email = "mael.juhel@edu.ece.fr" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+ece-2026-mael-juhel = "ece_2026_mael_juhel:main"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"

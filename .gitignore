@@ -1,0 +1,7 @@
+git config --global init.defaultBranch main
+git init
+cat <<'INI' >.gitignore
+.*
+!.gitignore
+!.python-version
+__pycache__/
