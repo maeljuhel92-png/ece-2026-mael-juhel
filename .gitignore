@@ -5,3 +5,4 @@ cat <<'INI' >.gitignore
 !.gitignore
 !.python-version
 __pycache__/
+*.csv
