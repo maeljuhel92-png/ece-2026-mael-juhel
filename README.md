@@ -171,3 +171,91 @@ timed(uncached, "uncached, 2nd")
 ```
 
 With the cache, repeated actions are faster because parsing is not redone, and the Storage tab of the Spark UI lists the cached RDD and its size in memory. Without it, the Storage tab is empty and each action re-reads and re-parses the file.
+
+# Lab 7 Bronze to Silver with PySpark and Iceberg
+
+A hands-on lab that builds the **silver layer** of a medallion architecture using **Apache Spark (PySpark)**, reading raw CSV files from S3-compatible object storage and writing cleaned data back as **Parquet** and **Apache Iceberg** tables.
+
+It reproduces the same silver layer as a companion dbt lab, so the two approaches (SQL with dbt/DuckDB vs. Spark) can be compared side by side.
+
+## Stack
+
+| Component | Role |
+|-----------|------|
+| Apache Spark / PySpark | Transformation engine (`local[*]` mode) |
+| Apache Iceberg | Table format for the silver layer |
+| S3 (Onyxia object storage) | Storage for bronze, silver and warehouse data |
+| Hadoop-AWS (S3A) | Spark connector to S3 with temporary STS credentials |
+| DuckDB | Used to validate and compare outputs |
+| uv | Python environment and project management |
+
+## What it covers
+
+1. **SparkSession with S3 access**: configure the S3A connector with temporary credentials (`TemporaryAWSCredentialsProvider`) and declare an Iceberg catalog.
+2. **Bronze layer**: read `users.csv` and `orders.csv` directly from S3.
+3. **Silver layer**:
+   - Users: rename, trim, cast, and parse the multi-line `address` into `street`, `city`, `state`, `zip_code` (with NULL handling for military addresses).
+   - Orders: type casting and deduplication with a window function (`row_number()`).
+   - The same logic written twice: **DataFrame API** and **Spark SQL**.
+4. **Parquet output**: write the silver layer to `s3a://<bucket>/silver/spark/`.
+5. **Iceberg output**: write tables to the `lab.silver` namespace and inspect `data/` and `metadata/`, snapshots, and files.
+6. **Comparison with dbt**: row counts, schemas, output layout, testing, lineage, and when to pick which tool.
+
+## Project layout
+
+```
+.
+├── README.md
+└── warehouse/
+    └── silver/
+        ├── orders/metadata/   # Iceberg metadata (committed)
+        └── users/metadata/    # Iceberg metadata (committed)
+```
+
+Only Iceberg **metadata** is versioned in Git. Data files stay in the bucket.
+
+## Prerequisites
+
+- An Onyxia `vscode-pyspark` service with at least `cpu: 4` and `memory: 4Gi`
+- A uv project set up in a previous lab
+- Bronze datasets uploaded to `s3://<bucket>/bronze/users.csv` and `orders.csv`
+- Network access to Maven Central (the Iceberg runtime jar is downloaded at session start)
+- S3 credentials available as environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_S3_ENDPOINT`)
+- *(Optional)* The dbt lab output in `silver/dbt/` for the final comparison
+
+## Getting started
+
+```bash
+# Set the bucket name (same as the Kubernetes namespace on Onyxia)
+export LAB_BUCKET_NAME="$KUBERNETES_NAMESPACE"
+
+# Check the bronze data is present
+aws s3 --profile default ls "s3://$LAB_BUCKET_NAME/bronze/"
+
+# Check Spark / Hadoop versions
+uv run pyspark --version
+ls $SPARK_HOME/jars | grep -i hadoop-aws
+
+# Start the PySpark shell with the Iceberg runtime
+pyspark --master local[*] \
+  --packages org.apache.iceberg:iceberg-spark-runtime-4.1_2.13:1.11.0
+```
+
+> The Iceberg artifact name depends on your Spark and Scala versions
+> (`iceberg-spark-runtime-<spark>_<scala>`). Adjust it to match your environment.
+
+## Key concepts illustrated
+
+- **Explicit S3A configuration** is required for temporary credentials, since the default provider ignores the session token.
+- **`regexp_extract()` returns an empty string, not NULL**, on no match. It must be converted explicitly to avoid silent errors in later aggregations.
+- **Window functions are wide transformations**: `partitionBy()` triggers a shuffle.
+- **Parquet vs. Iceberg**: a Parquet output is a directory of part-files; an Iceberg table adds metadata, snapshots, and atomic commits.
+- **`inferSchema` is only suitable for small datasets**; define schemas explicitly in production.
+
+## Validation
+
+- Row counts are asserted after each write (Parquet and Iceberg) against the source DataFrames.
+- DuckDB queries compare row counts and quantity sums between the dbt and Spark outputs.
+- DuckDB `DESCRIBE` is used to compare schemas (notably `order_id` and `ordered_at`, since Spark has no `UUID` type).
+
+
